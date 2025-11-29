@@ -1,31 +1,27 @@
-import os
 import asyncio
-import httpx
 import json
+from typing import Any, List, Optional, Union
+
+import httpx
 import json_repair
-from loguru import logger
-from jinja2 import Template
-from collections import defaultdict
-from enum import Enum
-from typing import Union, List, Optional, Any
 from httpx_sse import aconnect_sse
-from pydantic import Field
-from mira.args import OpenRouterArgs, OpenAIArgs
-from mira.types import AIMessage, HumanMessage, SystemMessage, LLMTool, ToolMessage, NameSpace
+from loguru import logger
+
+from mira.args import OpenAIArgs, OpenRouterArgs
+from mira.types import AIMessage, HumanMessage, NameSpace, SystemMessage, ToolMessage
 
 
 class OpenRouterClient:
-
     def __init__(self, api_key, base_url, provider: str):
         self.api_key = api_key
         self.base_url = base_url
         self.provider = provider
 
     def response_alignment(self, data: NameSpace):
-        if self.provider == 'doubao':
+        if self.provider == "doubao":
             for choice in data.choices:
                 choice.delta.reasoning = choice.delta.reasoning_content
-                choice.delta.reasoning_content = ''
+                choice.delta.reasoning_content = ""
 
         return data
 
@@ -36,18 +32,18 @@ class OpenRouterClient:
         messages: list[dict],
         tools: Optional[list[dict]] = None,
         tool_choice: Optional[str] = None,
-        response_format: Optional[dict] = {'type': 'text'},
+        response_format: Optional[dict] = {"type": "text"},
         args: Optional[OpenRouterArgs | OpenAIArgs] = None,
         **kwargs,
     ):
         args = args.set_params(**kwargs)
 
-        base_url = self.base_url + '/chat/completions'
+        base_url = self.base_url + "/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
             "HTTP-Referer": "https://www.ai.com",
-            "X-Title": f"{self.provider} Chat Completion"
+            "X-Title": f"{self.provider} Chat Completion",
         }
         payload = {
             "model": model,
@@ -59,15 +55,15 @@ class OpenRouterClient:
 
         payload.update(**args.to_dict())
 
-        if self.provider in ['openai']:
-            payload['structured_outputs'] = response_format
-        elif self.provider in ['doubao']:
-            payload['response_format'] = response_format
-            payload['thinking'] = {"type": "enabled" if args.reasoning_effort else "disabled"}
-            if 'ep-' in args.model:
-                payload['model'] = payload['model'].split('/')[-1]
+        if self.provider in ["openai"]:
+            payload["structured_outputs"] = response_format
+        elif self.provider in ["doubao"]:
+            payload["response_format"] = response_format
+            payload["thinking"] = {"type": "enabled" if args.reasoning_effort else "disabled"}
+            if "ep-" in args.model:
+                payload["model"] = payload["model"].split("/")[-1]
         else:
-            payload['response_format'] = response_format
+            payload["response_format"] = response_format
 
         if args and args.verbose:
             logger.info(json.dumps(payload, indent=2, ensure_ascii=False))
@@ -81,7 +77,7 @@ class OpenRouterClient:
                     logger.info(data)
                 yield NameSpace(data)
             else:
-                async with aconnect_sse(cli, 'POST', base_url, headers=headers, json=payload) as s:
+                async with aconnect_sse(cli, "POST", base_url, headers=headers, json=payload) as s:
                     if s.response.status_code != 200:
                         logger.error(await s.response.aread())
 
@@ -89,7 +85,7 @@ class OpenRouterClient:
                         try:
                             if not sse.data:
                                 continue
-                            if sse.data == '[DONE]':
+                            if sse.data == "[DONE]":
                                 break
                             data = json.loads(sse.data)
                             if args.verbose:
@@ -102,8 +98,7 @@ class OpenRouterClient:
                             continue
 
 
-class OpenRouterLLM():
-
+class OpenRouterLLM:
     # use asyncio
     def __init__(self, args: OpenRouterArgs = None, num_workers=4, **kwargs):
         self.args = args.set_params(**kwargs)
@@ -115,11 +110,11 @@ class OpenRouterLLM():
         if not self.args.model:
             raise ValueError("model is required")
 
-        provider, model = self.args.model.split('/')
+        provider, model = self.args.model.split("/")
 
         api_key = self.args.api_key
         base_url = self.args.base_url
-        self.model = provider + '/' + model
+        self.model = provider + "/" + model
         self.provider = provider
         self.client = OpenRouterClient(api_key, base_url, provider)
 
@@ -151,7 +146,7 @@ class OpenRouterLLM():
                 name = names[index]
                 tool_call_id = callids[index]
                 args = map(lambda x: x[1], filter(lambda x: x[0] == index and x[1], arguments))
-                args = json_repair.loads(''.join(args))
+                args = json_repair.loads("".join(args))
                 task = funcs[name](**args).invoke(tool_call_id)
                 tasks.append(task)
 
@@ -179,7 +174,7 @@ class OpenRouterLLM():
                 messages=[m.dict() for m in messages],
                 tools=[tool.schema() for tool in tools] or None,
                 response_format=response_format.schema() if response_format else None,
-                tool_choice='auto' if tools else None,
+                tool_choice="auto" if tools else None,
                 args=self.args.set_params(**kwargs),
             )
 
@@ -200,15 +195,17 @@ class OpenRouterLLM():
 
                     # If rollouts does not contain the index, initialize a rollout
                     if index not in rollouts:
-                        rollouts[index] = NameSpace({
-                            'queue': [],
-                            'callback': None,
-                            'messages': [],
-                            'content': '',
-                            'reasoning': '',
-                            'logprobs': [],
-                            'token_ids': [],
-                        })
+                        rollouts[index] = NameSpace(
+                            {
+                                "queue": [],
+                                "callback": None,
+                                "messages": [],
+                                "content": "",
+                                "reasoning": "",
+                                "logprobs": [],
+                                "token_ids": [],
+                            }
+                        )
 
                     if delta.logprobs:
                         rollouts[index].logprobs.extend(delta.logprobs)
@@ -218,20 +215,20 @@ class OpenRouterLLM():
 
                     if delta.reasoning:
                         rollouts[index].reasoning += delta.reasoning
-                        yield NameSpace({'index': index, 'reasoning': delta.reasoning})
+                        yield NameSpace({"index": index, "reasoning": delta.reasoning})
 
                     queue_i = rollouts[index].queue
                     if delta.tool_calls:
                         queue_i.extend(delta.tool_calls)
 
-                    if choice.finish_reason == 'tool_calls':
+                    if choice.finish_reason == "tool_calls":
                         if queue_i:
                             callback = await self.add_execute_callback(tools, queue_i)
                             rollouts[index].callback = callback
 
                     if delta.content:
                         rollouts[index].content += delta.content
-                        yield NameSpace({'index': index, 'content': delta.content})
+                        yield NameSpace({"index": index, "content": delta.content})
 
             for _, rollout in rollouts.items():
                 callback = rollout.callback
@@ -271,26 +268,3 @@ class OpenRouterLLM():
             pass
 
         return self.messages
-
-
-if __name__ == '__main__':
-    import tyro, json
-
-    # args = tyro.cli(OpenAIArgs)
-    # args.model = 'openai/gpt-5-chat'
-    # args.model = 'oai/gpt-5-mini'
-
-    args = tyro.cli(OpenRouterArgs)
-    # args.model = 'openai/gpt-5-mini'
-    args.model = 'google/gemini-2.5-flash'
-    # args.model = 'anthropic/claude-sonnet-4.5'
-
-    # args = tyro.cli(ByteDanceArgs)
-    # args.model = 'doubao/ep-20250615233659-m7btt'
-
-    messages = [
-        HumanMessage(content='计算 123 * 354 和 234 + 23，然后计算两个结果求和'),
-    ]
-
-    llm = OpenRouterLLM(args)
-    m = asyncio.run(llm.invoke(messages))

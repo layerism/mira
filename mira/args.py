@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Literal, Optional
 
-from mira import hf_get_or_download
+from mira.utils import hf_get_or_download
 
 
 @dataclass

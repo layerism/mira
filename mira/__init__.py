@@ -1,6 +1,4 @@
-import os
 import random
-import subprocess
 import sys
 from pathlib import Path
 
@@ -16,6 +14,7 @@ np.random.seed(42)
 cache_dir = Path(__file__).parent.parent.resolve() / ".cache"
 cache = dc.Cache(cache_dir)
 
+
 logger.remove()
 logger.add(
     sys.stdout,
@@ -29,45 +28,7 @@ logger.add(
 )
 
 
-def hf_get_or_download(
-    repo_id: str,
-    repo_type: str = "model",
-    force_download: bool = False,
-    rename: str = None,
-) -> None:
-    from huggingface_hub import HfFolder, login, snapshot_download
-    from transformers import TRANSFORMERS_CACHE
-
-    # download model to ~/.cache/huggingface/hub
-    if rename is None:
-        rename = repo_id.split("/")[-1]
-
-    env = "MODEL-{}".format(rename.upper())
-    logger.info("{} --> Using default HF cache directory".format(env))
-
-    token = HfFolder.get_token()
-    if not token:
-        login(token=os.environ["HF_TOKEN"])
-
-    model_cache = "/{}s--{}/snapshots".format(repo_type, repo_id.replace("/", "--"))
-    repo_default_cache = TRANSFORMERS_CACHE + model_cache
-    repo_default_cache = os.path.expanduser(repo_default_cache)
-
-    if force_download:
-        subprocess.run(["rm", "-rf", repo_default_cache])
-
-    local_files_only = False
-    if Path(repo_default_cache).exists():
-        local_files_only = True
-
-    logger.info(f"{repo_type.upper()} Repo Path: {repo_default_cache}")
-
-    local_dir = snapshot_download(repo_id=repo_id, repo_type=repo_type, local_files_only=local_files_only)
-
-    return local_dir
-
-
-# Export public API
+# Export public API - import after initialization to avoid circular imports
 from mira.args import OpenAIArgs, OpenRouterArgs, VLLMArgs
 from mira.openrouter import OpenRouterLLM
 from mira.types import (
@@ -82,6 +43,7 @@ from mira.types import (
     ToolCall,
     ToolMessage,
 )
+from mira.utils import hf_get_or_download
 
 __all__ = [
     # Utility functions

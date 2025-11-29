@@ -54,6 +54,9 @@ all = [
     "mira[monitoring]",
 ]
 
+[project.scripts]
+mira-server = "mira.oai_protocol:main"
+
 [tool.setuptools]
 packages = ["mira"]
 

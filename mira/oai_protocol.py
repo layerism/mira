@@ -217,6 +217,10 @@ async def stream_chat_response(engine: AsyncVLLMEngine, request_id: str):
         yield "data: [DONE]\n\n"
 
 
-if __name__ == "__main__":
+def main():
     http = Config(app, host=args.host, port=args.port)
-    http = Server(config=http).run()
+    Server(config=http).run()
+
+
+if __name__ == "__main__":
+    main()
