@@ -106,9 +106,6 @@ class Engine(ABC):
     def generate(self, prompts: List[str], **kwargs) -> List[Any]:
         pass
 
-    def get_logprobas(self, prompts: List[str], gen_texts: List[str], **kwargs) -> List[torch.Tensor]:
-        pass
-
     def get_hidden_states(self, prompts: List[str], **kwargs) -> List[torch.Tensor]:
         pass
 
@@ -174,27 +171,17 @@ class HFEngine(Engine):
         assert self.tokenizer.pad_token_id != self.tokenizer.eos_token_id
         assert self.tokenizer.pad_token_id != self.tokenizer.bos_token_id
 
-    def get_sampling_params(self, **kwargs):
+    def get_sampling_params(self, response_format: Optional[dict] = None, **kwargs):
         args = copy.deepcopy(self.args).set_params(**kwargs)
-        sampling_params = {
-            "max_length": args.max_tokens,
-            "max_new_tokens": args.max_new_tokens,
-            "temperature": args.temperature,
-            "early_stopping": False,
-            "num_beams": args.num_beams,
-            "do_sample": args.do_sample,
-            "top_p": args.top_p,
-            "top_k": args.top_k,
-            "bos_token_id": self.tokenizer.bos_token_id,
-            "eos_token_id": self.tokenizer.eos_token_id,
-            "pad_token_id": self.tokenizer.pad_token_id,
-            "repetition_penalty": args.repetition_penalty,
-            "num_return_sequences": args.n,
-            "output_scores": args.output_scores,
-            "return_dict_in_generate": args.return_dict_in_generate,
-        }
+        sampling_params = args.asdict()
+
+        if response_format:
+            schema = response_format["json_schema"]["schema"]
+            so = StructuredOutputsParams(json=schema)
+            sampling_params.structured_outputs = so
 
         logger.info(f"sampling_params: {sampling_params}")
+
         return sampling_params
 
     def generate(self, prompts: List[str], **kwargs) -> List[Any]:
@@ -359,12 +346,12 @@ class VLLMEngine(Engine):
 
         sampling_params = self.get_sampling_params(response_format, **kwargs)
 
-        request_id = "req_" + str(uuid.uuid4())
+        request_id = "req_" + str(uuid.uuid4().hex)
         self.engine.add_request(request_id, prompt, sampling_params)
 
         return request_id
 
-    def generate(self, prompts: List[str], response_format: Optional[Any] = None, **kwargs) -> List[Any]:
+    def generate(self, prompts: List[str], response_format: Optional[dict] = None, **kwargs) -> List[Any]:
         if isinstance(prompts, str):
             prompts = [prompts]
 
