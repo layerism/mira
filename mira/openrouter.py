@@ -1,0 +1,296 @@
+import os
+import asyncio
+import httpx
+import json
+import json_repair
+from loguru import logger
+from jinja2 import Template
+from collections import defaultdict
+from enum import Enum
+from typing import Union, List, Optional, Any
+from httpx_sse import aconnect_sse
+from pydantic import Field
+from mira.args import OpenRouterArgs, OpenAIArgs
+from mira.types import AIMessage, HumanMessage, SystemMessage, LLMTool, ToolMessage, NameSpace
+
+
+class OpenRouterClient:
+
+    def __init__(self, api_key, base_url, provider: str):
+        self.api_key = api_key
+        self.base_url = base_url
+        self.provider = provider
+
+    def response_alignment(self, data: NameSpace):
+        if self.provider == 'doubao':
+            for choice in data.choices:
+                choice.delta.reasoning = choice.delta.reasoning_content
+                choice.delta.reasoning_content = ''
+
+        return data
+
+    @logger.catch
+    async def chat_completion_create(
+        self,
+        model: str,
+        messages: list[dict],
+        tools: Optional[list[dict]] = None,
+        tool_choice: Optional[str] = None,
+        response_format: Optional[dict] = {'type': 'text'},
+        args: Optional[OpenRouterArgs | OpenAIArgs] = None,
+        **kwargs,
+    ):
+        args = args.set_params(**kwargs)
+
+        base_url = self.base_url + '/chat/completions'
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://www.ai.com",
+            "X-Title": f"{self.provider} Chat Completion"
+        }
+        payload = {
+            "model": model,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": tool_choice,
+            "stream": args.stream,
+        }
+
+        payload.update(**args.to_dict())
+
+        if self.provider in ['openai']:
+            payload['structured_outputs'] = response_format
+        elif self.provider in ['doubao']:
+            payload['response_format'] = response_format
+            payload['thinking'] = {"type": "enabled" if args.reasoning_effort else "disabled"}
+            if 'ep-' in args.model:
+                payload['model'] = payload['model'].split('/')[-1]
+        else:
+            payload['response_format'] = response_format
+
+        if args and args.verbose:
+            logger.info(json.dumps(payload, indent=2, ensure_ascii=False))
+
+        timeout = httpx.Timeout(3600.0)
+        async with httpx.AsyncClient(timeout=timeout) as cli:
+            if not args.stream:
+                response = await cli.post(base_url, headers=headers, json=payload)
+                data = response.json()
+                if args.verbose:
+                    logger.info(data)
+                yield NameSpace(data)
+            else:
+                async with aconnect_sse(cli, 'POST', base_url, headers=headers, json=payload) as s:
+                    if s.response.status_code != 200:
+                        logger.error(await s.response.aread())
+
+                    async for sse in s.aiter_sse():
+                        try:
+                            if not sse.data:
+                                continue
+                            if sse.data == '[DONE]':
+                                break
+                            data = json.loads(sse.data)
+                            if args.verbose:
+                                logger.info(data)
+                            data = NameSpace(data)
+                            data = self.response_alignment(data)
+                            yield data
+                        except Exception as e:
+                            logger.error(e)
+                            continue
+
+
+class OpenRouterLLM():
+
+    # use asyncio
+    def __init__(self, args: OpenRouterArgs = None, num_workers=4, **kwargs):
+        self.args = args.set_params(**kwargs)
+        self.semaphore = asyncio.Semaphore(num_workers)
+        self.messages = []
+        self.set_model()
+
+    def set_model(self, **kwargs):
+        if not self.args.model:
+            raise ValueError("model is required")
+
+        provider, model = self.args.model.split('/')
+
+        api_key = self.args.api_key
+        base_url = self.args.base_url
+        self.model = provider + '/' + model
+        self.provider = provider
+        self.client = OpenRouterClient(api_key, base_url, provider)
+
+        return self
+
+    async def add_execute_callback(
+        self,
+        tools: List[Any],
+        queue: List,
+        **kwargs,
+    ) -> asyncio.Task:
+        if not tools:
+            return None
+
+        funcs = dict([(t.__name__, t) for t in tools])
+
+        async def ready_to_fire(tool_calls):
+            if self.args.stream:
+                callids = dict([(t.index, t.id) for t in tool_calls if t.id])
+                names = dict([(t.index, t.function.name) for t in tool_calls if t.function.name])
+                arguments = [(t.index, t.function.arguments) for t in tool_calls]
+            else:
+                callids = dict([(i, t.id) for i, t in enumerate(tool_calls)])
+                names = dict([(i, t.function.name) for i, t in enumerate(tool_calls)])
+                arguments = [(i, t.function.arguments) for i, t in enumerate(tool_calls)]
+
+            tasks = []
+            for index in range(len(callids)):
+                name = names[index]
+                tool_call_id = callids[index]
+                args = map(lambda x: x[1], filter(lambda x: x[0] == index and x[1], arguments))
+                args = json_repair.loads(''.join(args))
+                task = funcs[name](**args).invoke(tool_call_id)
+                tasks.append(task)
+
+            return await asyncio.gather(*tasks)
+
+        # return [[a, b], [a, b],..]
+        gather = asyncio.create_task(ready_to_fire(queue))
+
+        return gather
+
+    async def generate(
+        self,
+        messages: List[Union[SystemMessage, HumanMessage, AIMessage, ToolMessage]] = [],
+        tools: Optional[List[Any]] = [],
+        response_format: Optional[Any] = None,
+        **kwargs,
+    ):
+        # define an async queue
+        rollouts = {}
+
+        async with self.semaphore:
+            # 请求各路大模型 api，然后返回 json 格式的 response
+            completion = self.client.chat_completion_create(
+                model=self.model,
+                messages=[m.dict() for m in messages],
+                tools=[tool.schema() for tool in tools] or None,
+                response_format=response_format.schema() if response_format else None,
+                tool_choice='auto' if tools else None,
+                args=self.args.set_params(**kwargs),
+            )
+
+            async for chunk in completion:
+                if not chunk.choices:
+                    continue
+
+                # parse json format response
+                for choice in chunk.choices:
+                    index = choice.index
+
+                    # In stream mode, `delta` provides incremental updates;
+                    # in non-stream mode, `message` contains the complete content.
+                    if choice.delta:
+                        delta = choice.delta
+                    else:
+                        delta = choice.message
+
+                    # If rollouts does not contain the index, initialize a rollout
+                    if index not in rollouts:
+                        rollouts[index] = NameSpace({
+                            'queue': [],
+                            'callback': None,
+                            'messages': [],
+                            'content': '',
+                            'reasoning': '',
+                            'logprobs': [],
+                            'token_ids': [],
+                        })
+
+                    if delta.logprobs:
+                        rollouts[index].logprobs.extend(delta.logprobs)
+
+                    if delta.token_ids:
+                        rollouts[index].token_ids.extend(delta.token_ids)
+
+                    if delta.reasoning:
+                        rollouts[index].reasoning += delta.reasoning
+                        yield NameSpace({'index': index, 'reasoning': delta.reasoning})
+
+                    queue_i = rollouts[index].queue
+                    if delta.tool_calls:
+                        queue_i.extend(delta.tool_calls)
+
+                    if choice.finish_reason == 'tool_calls':
+                        if queue_i:
+                            callback = await self.add_execute_callback(tools, queue_i)
+                            rollouts[index].callback = callback
+
+                    if delta.content:
+                        rollouts[index].content += delta.content
+                        yield NameSpace({'index': index, 'content': delta.content})
+
+            for _, rollout in rollouts.items():
+                callback = rollout.callback
+                if callback:
+                    tools_results = await callback
+                    for tool_call, tool_return in tools_results:
+                        tool_call.content = rollout.reasoning or rollout.content
+                        tool_call.logprobs = rollout.logprobs
+                        tool_call.token_ids = rollout.token_ids
+                        rollout.messages.append(tool_call)
+                        rollout.messages.append(tool_return)
+                else:
+                    if rollout.content:
+                        assistant = AIMessage(
+                            content=rollout.content,
+                            logprobs=rollout.logprobs,
+                            reasoning=rollout.reasoning,
+                        )
+                        rollout.messages.append(assistant)
+
+        self.messages = [r.messages for r in rollouts.values()]
+
+    async def invoke(
+        self,
+        messages: List[Union[SystemMessage, HumanMessage, AIMessage, ToolMessage]] = [],
+        tools: Optional[List[Any]] = [],
+        response_format: Optional[Any] = None,
+        **kwargs,
+    ):
+        generator = self.generate(
+            messages=messages,
+            tools=tools,
+            response_format=response_format,
+            **kwargs,
+        )
+        async for chunk in generator:
+            pass
+
+        return self.messages
+
+
+if __name__ == '__main__':
+    import tyro, json
+
+    # args = tyro.cli(OpenAIArgs)
+    # args.model = 'openai/gpt-5-chat'
+    # args.model = 'oai/gpt-5-mini'
+
+    args = tyro.cli(OpenRouterArgs)
+    # args.model = 'openai/gpt-5-mini'
+    args.model = 'google/gemini-2.5-flash'
+    # args.model = 'anthropic/claude-sonnet-4.5'
+
+    # args = tyro.cli(ByteDanceArgs)
+    # args.model = 'doubao/ep-20250615233659-m7btt'
+
+    messages = [
+        HumanMessage(content='计算 123 * 354 和 234 + 23，然后计算两个结果求和'),
+    ]
+
+    llm = OpenRouterLLM(args)
+    m = asyncio.run(llm.invoke(messages))

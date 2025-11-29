@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mira"
+version = "0.1.0"
+description = "Model-Integrated Routing & Adaptation - A flexible LLM inference and routing framework"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "MIT"}
+authors = [
+    {name = "luyukun", email = "lcyqky@icloud.com"},
+]
+keywords = ["llm", "vllm", "inference", "routing", "openai", "openrouter"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "vllm==0.11.1",
+    "torch<=2.9.0",
+    "transformers>=4.30.0",
+    "openai>=1.0.0",
+    "httpx>=0.24.0",
+    "httpx-sse>=0.3.0",
+    "uvicorn>=0.22.0",
+    "fastapi>=0.100.0",
+    "pydantic>=2.0.0",
+    "numpy>=1.24.0",
+    "loguru>=0.7.0",
+    "python-dotenv>=1.0.0",
+    "diskcache>=5.6.0",
+    "jinja2>=3.1.0",
+    "tyro>=0.5.0",
+    "json-repair>=0.7.0",
+    "huggingface-hub>=0.16.0",
+    "lm-eval==0.4.7",
+    "lxml>=4.9.0"
+]
+
+[project.optional-dependencies]
+monitoring = [
+    "nvitop>=1.0.0",
+]
+
+all = [
+    "mira[monitoring]",
+]
+
+[tool.setuptools]
+packages = ["mira"]
+
+[tool.setuptools.package-data]
+mira = ["py.typed"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.format]
+indent-style = "space"
+quote-style = "double"
+skip-magic-trailing-comma = false
+
+[tool.pylint.messages_control]
+max-line-length = 120
+disable = [
+    "C0111",  # missing-docstring
+    "C0103",  # invalid-name
+    "R0913",  # too-many-arguments
+    "R0914",  # too-many-locals
+]
