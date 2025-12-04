@@ -1,5 +1,8 @@
 import asyncio
 import json
+import queue
+import threading
+from concurrent.futures import Future
 from typing import Any, List, Optional, Union
 
 import httpx
@@ -8,7 +11,63 @@ from httpx_sse import aconnect_sse
 from loguru import logger
 
 from mira.args import OpenAIArgs, OpenRouterArgs
-from mira.types import AIMessage, HumanMessage, NameSpace, SystemMessage, ToolMessage
+from mira.types import AIMessage, HumanMessage, NameSpace, SystemMessage, Task, ToolMessage
+
+# class ToolThreadPool:
+#     """
+#     Elegant Thread Pool:
+#     - Supports add() to add class tasks (non-blocking)
+#     - Supports synchronous get_result()
+#     - Supports asynchronous await get_result_async()
+#     - Supports class initialization + __call__()
+#     """
+
+#     def __init__(self, num_workers: int = 4):
+#         self.task_queue = queue.Queue()
+#         self.workers = []
+#         self._shutdown = False
+#         self.tid = 0
+
+#         for _ in range(num_workers):
+#             t = threading.Thread(target=self._worker_loop, daemon=True)
+#             t.start()
+#             self.workers.append(t)
+
+#     def _worker_loop(self):
+#         while not self._shutdown:
+#             try:
+#                 task: Task = self.task_queue.get(timeout=0.1)
+#             except queue.Empty:
+#                 continue
+
+#             if task.future.cancelled():
+#                 continue
+
+#             try:
+#                 instance = task.cls(**task.args)
+
+#                 result = instance.invoke(task.tid)
+
+#                 task.future.set_result([result])
+#             except Exception as e:
+#                 task.future.set_exception(e)
+
+#             self.task_queue.task_done()
+
+#     def add(self, cls, args, tid) -> Future:
+#         future = Future()
+#         task = Task(cls=cls, args=args, tid=tid, future=future)
+#         self.task_queue.put(task)
+#         return future
+
+#     async def get_result(self, future: Future):
+#         loop = asyncio.get_running_loop()
+#         return await loop.run_in_executor(None, future.result)
+
+#     def shutdown(self):
+#         self._shutdown = True
+#         for t in self.workers:
+#             t.join()
 
 
 class OpenRouterClient:
@@ -251,7 +310,7 @@ class OpenRouterLLM:
 
         self.messages = [r.messages for r in rollouts.values()]
 
-    async def invoke(
+    async def forward(
         self,
         messages: List[Union[SystemMessage, HumanMessage, AIMessage, ToolMessage]] = [],
         tools: Optional[List[Any]] = [],

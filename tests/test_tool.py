@@ -4,13 +4,16 @@ import os
 import tyro
 from loguru import logger
 from pydantic import Field
+import time
 
 from mira.args import OpenAIArgs
 from mira.openrouter import OpenRouterLLM
 from mira.types import HumanMessage, LLMTool
 
+problem = "calculate 34 + 2356 and calculate 467 * 12, then calculate the sum of the two results"
 
-class AddTools(LLMTool):
+
+class AddTool(LLMTool):
     """calculate the sum of two numbers"""
 
     x: float = Field(..., description="the first number")
@@ -20,7 +23,7 @@ class AddTools(LLMTool):
         return self.x + self.y
 
 
-class MultiplyTools(LLMTool):
+class MultiplyTool(LLMTool):
     """calculate the product of two numbers"""
 
     x: float = Field(..., description="the first number")
@@ -32,11 +35,14 @@ class MultiplyTools(LLMTool):
 
 async def main(args: OpenAIArgs):
     llm = OpenRouterLLM(args=args)
-    m = [HumanMessage(content="calculate 34 + 2356 and calculate 467 * 12, then calculate the sum of the two results")]
-    dm = await llm.invoke(messages=m, tools=[AddTools, MultiplyTools])
-    dm = await llm.invoke(messages=m + dm[0], tools=[AddTools, MultiplyTools])
-    for ddm in dm:
-        logger.info(ddm)
+    m = [HumanMessage(content=problem)]
+
+    for _ in range(1):
+        dm = await llm.forward(messages=m, tools=[AddTool, MultiplyTool])
+        #dm = await llm.forward(messages=m)
+        m = m + dm[0]
+
+    logger.info(m)
 
 
 if __name__ == "__main__":

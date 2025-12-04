@@ -18,7 +18,7 @@ class OutputFormat(LLMJson):
 async def main(args):
     llm = OpenRouterLLM(args=args)
     m = HumanMessage(content="计算 34 + 2356 以及 467 * 12 的结果。")
-    dm = await llm.invoke(messages=[m], response_format=OutputFormat)
+    dm = await llm.forward(messages=[m], response_format=OutputFormat)
     logger.info(dm)
 
 

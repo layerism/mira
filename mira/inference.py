@@ -1,18 +1,21 @@
 import asyncio
+import base64
 import copy
 import inspect
+import io
 import time
 import uuid
 from abc import ABC
 from collections import defaultdict
 from dataclasses import asdict, dataclass, field
-from typing import Any, List, Literal, Optional
+from typing import Any, List, Literal, Optional, Tuple
 
 import json_repair
 import numpy as np
 import torch
 from loguru import logger
 from lxml.etree import XMLPullParser
+from PIL import Image
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from vllm import AsyncLLMEngine, LLMEngine, SamplingParams
 from vllm.outputs import CompletionOutput
@@ -134,10 +137,21 @@ class Engine(ABC):
         reasoning_effort: Optional[str] = None,
         tokenize: bool = False,
         add_generation_prompt: bool = True,
-    ) -> List[str]:
+    ) -> List[str | dict]:
         # then convert to dict
         if not isinstance(messages[0], dict):
             messages = [m.dict() for m in messages]
+
+        images = []
+        for message in messages:
+            if message["role"] == "user":
+                if isinstance(message["content"], str):
+                    continue
+                for c in message["content"]:
+                    if c["type"] == "image_url":
+                        _, b64data = c["image_url"]["url"].split(",", 1)
+                        img_bytes = base64.b64decode(b64data)
+                        images.append(Image.open(io.BytesIO(img_bytes)))
 
         prompt = self.tokenizer.apply_chat_template(
             messages,
@@ -146,6 +160,12 @@ class Engine(ABC):
             add_generation_prompt=add_generation_prompt,
             enable_thinking=True if reasoning_effort else False,
         )
+
+        if images:
+            prompt = {
+                "prompt": prompt,
+                "multi_modal_data": {"image": images},
+            }
 
         return prompt
 
@@ -339,20 +359,20 @@ class VLLMEngine(Engine):
 
         return sampling_params
 
-    def add_request(self, prompt: str, response_format: Optional[dict] = None, **kwargs) -> str:
+    def add_request(self, prompt: str | dict, response_format: Optional[dict] = None, **kwargs) -> str:
         # lstrip bos_token because vllm will add it.
         if self.tokenizer.bos_token:
             prompt = prompt.lstrip(self.tokenizer.bos_token)
 
         sampling_params = self.get_sampling_params(response_format, **kwargs)
 
-        request_id = "req_" + str(uuid.uuid4().hex)
+        request_id = f"chatcmpl-{uuid.uuid4().hex}"
         self.engine.add_request(request_id, prompt, sampling_params)
 
         return request_id
 
-    def generate(self, prompts: List[str], response_format: Optional[dict] = None, **kwargs) -> List[Any]:
-        if isinstance(prompts, str):
+    def generate(self, prompts: List[str | dict], response_format: Optional[dict] = None, **kwargs) -> List[Any]:
+        if isinstance(prompts, str) or isinstance(prompts, dict):
             prompts = [prompts]
 
         request_id_list = [self.add_request(prompt, response_format, **kwargs) for prompt in prompts]
@@ -404,7 +424,7 @@ class AsyncVLLMEngine(VLLMEngine):
         self.tokenizer = None
         self.q = {}
 
-    async def add_request(self, prompt: str, response_format: Optional[dict] = None, **kwargs) -> str:
+    async def add_request(self, prompt: str | dict, response_format: Optional[dict] = None, **kwargs) -> str:
         request_id = f"chatcmpl-{uuid.uuid4().hex}"
         sampling_params = self.get_sampling_params(response_format, **kwargs)
 
@@ -418,7 +438,11 @@ class AsyncVLLMEngine(VLLMEngine):
             self.q[request_id] = asyncio.Queue()
 
         async def generator():
-            async for req_out in self.engine.generate(prompt, sampling_params, request_id):
+            async for req_out in self.engine.generate(
+                prompt,
+                sampling_params=sampling_params,
+                request_id=request_id,
+            ):
                 if req_out is not None:
                     await self.q[request_id].put(req_out)
             # ending flag
@@ -466,7 +490,6 @@ class AsyncVLLMEngine(VLLMEngine):
 
             for output in req_out.outputs:
                 delta = copy.deepcopy(output)
-                logger.error(delta)
 
                 prev_text = ""
                 prev_token_ids = []

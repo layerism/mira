@@ -2,13 +2,15 @@ import base64
 import json
 import re
 import textwrap
-from pathlib import Path
+from concurrent.futures import Future
 from typing import Any, Dict, List, Literal, Optional
 
 import httpx
+from loguru import logger
 from openai import pydantic_function_tool
 from openai.types.chat.chat_completion_content_part_param import ChatCompletionContentPartParam as Content
 from pydantic import BaseModel, Field
+from urlextract import URLExtract
 
 
 class Message(BaseModel):
@@ -44,8 +46,8 @@ class AIMessage(Message):
     reasoning: Optional[str] = None
     tool_calls: Optional[List[ToolCall]] = None
 
-    logprobs: Optional[List[float]] = Field(default=None, exclude=True)
-    token_ids: Optional[List[int]] = Field(default=None, exclude=True)
+    logprobs: Optional[List[float]] = Field(default=[], exclude=True)
+    token_ids: Optional[List[int]] = Field(default=[], exclude=True)
 
 
 class ToolMessage(Message):
@@ -59,20 +61,20 @@ class HumanMessage(Message):
     role: Literal["user"] = "user"
     name: Optional[str] = None
     content: Optional[str | List[Content]] = None
+    detail: Optional[str] = "auto"
 
     def __init__(self, content: str):
         super().__init__(content=content)
 
-        splits = self.mmsplit()
+        splits = self.mmsplit(self.content)
 
         if len(splits) > 1:
             self.content = []
-            for part in splits:
-                suffix = Path(part).suffix.lower()
-                if suffix in [".jpg", ".jpeg", ".png"]:
+            for part, dtype in splits:
+                if dtype == "imurl":
                     content = self.encode_image(part)
                     content = f"data:image/jpeg;base64,{content}"
-                    self.content.append({"type": "image_url", "image_url": {"url": content, "detail": "auto"}})
+                    self.content.append({"type": "image_url", "image_url": {"url": content, "detail": self.detail}})
                 else:
                     self.content.append({"type": "text", "text": part})
 
@@ -86,33 +88,25 @@ class HumanMessage(Message):
 
         return base64.b64encode(bytes).decode("utf-8")
 
-    def mmsplit(self):
-        c = {
-            "protocol": r"(?:https?|ftp)://",  # 协议部分
-            "domain": r"[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*",  # 域名
-            "port": r"(?::\d+)?",  # 可选的端口
-            "path": r'(?:/[^\s<>"{}|\\^`\[\]]*)*',  # URL路径
-            "query": r'(?:\?[^\s<>"{}|\\^`\[\]]*)?',  # 查询参数
-            "fragment": r'(?:#[^\s<>"{}|\\^`\[\]]*)?',  # 锚点
-            "win_drive": r"[A-Za-z]:",  # Windows驱动器
-            "win_path": r'(?:\\[^\\/:*?"<>|\r\n]+)*\\?[^\\/:*?"<>|\r\n]*',  # Windows路径
-            "unix": r"/(?:[^/\0]|/(?!/))*",  # Unix路径
-            "relative": r"(?:\.\.?/)+(?:[^/\0]|/(?!/))*",  # 相对路径
-            "home": r"~/(?:[^/\0]|/(?!/))*",  # 用户主目录
-            "ext": r"\.(?:jpe?g|png|gif|bmp|webp|svg|ico|tiff?)",  # 图片扩展名
-        }
-        # 构建图片匹配模式
-        patterns = [
-            f"({c['protocol']}{c['domain']}{c['port']}{c['path']}{c['ext']}{c['query']}{c['fragment']})",  # 网络图片URL
-            f"({c['win_drive']}{c['win_path']}{c['ext']})",  # Windows本地图片路径
-            f"({c['unix']}{c['ext']})",  # Unix本地图片路径
-            f"({c['relative']}{c['ext']})",  # 相对路径图片
-            f"({c['home']}{c['ext']})",  # 用户主目录图片
-        ]
-        pattern = "|".join(patterns)
-        # pattern = r'(?i)\b(?:(?:https?|ftp)://)?(?:~/?|[-\w.]+/)*[-\w.]+\.(?:jpe?g|png)(?:\?[^\s]*)?\b'
-        splits = re.split(pattern, self.content)
-        splits = list(filter(lambda x: x and x.strip() != "", splits))
+    def mmsplit(self, text: str):
+        e = URLExtract()
+        urls = e.find_urls(text)
+        img_ext = re.compile(r"\.(?:jpe?g|png|gif|bmp|webp|svg|ico|tiff?)", re.IGNORECASE)
+        urls = [u for u in urls if img_ext.search(u)]
+
+        if not urls:
+            return [{"text": text}]  # no image url, return text
+
+        splits = []
+        for url in urls:
+            idx = text.find(url)
+            splits.append((text[:idx], "text"))
+            splits.append((url, "imurl"))
+            text = text[idx + len(url) :]
+        splits.append((text, "text"))
+
+        logger.info(splits)
+
         return splits
 
 
@@ -121,8 +115,11 @@ class LLMTool(BaseModel):
 
     @classmethod
     def schema(cls):
-        description = textwrap.dedent(cls.__doc__).strip()
+        description = "tool schema"
+        if cls.__doc__:
+            description = textwrap.dedent(cls.__doc__).strip()
         shema = pydantic_function_tool(cls, name=cls.__name__, description=description)
+        shema["function"]["parameters"].pop("description")
         return shema
 
     @classmethod
@@ -230,3 +227,18 @@ class NameSpace:
     def get(self, key, default=None):
         """类似字典的 get 方法"""
         return getattr(self, key, default)
+
+
+class Task:
+    """
+    Each task consists of:
+    - cls: The class to be initialized and called
+    - args/kwargs: Arguments for initializing cls
+    - future: Used to store the execution result, for use by get_result()
+    """
+
+    def __init__(self, cls, tid, args, future: Future):
+        self.cls = cls
+        self.tid = tid
+        self.args = args
+        self.future = future

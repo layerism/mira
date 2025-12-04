@@ -64,7 +64,7 @@ class OpenaiChatRequest(BaseModel):
     repetition_penalty: Optional[float] = 1.0
     presence_penalty: Optional[float] = 0.0
     frequency_penalty: Optional[float] = 0.0
-    top_p: Optional[float] = 1.0
+    top_p: Optional[float] = 0.95
     top_k: Optional[int] = -1
     max_completion_tokens: Optional[int] = 8192
     stop: Optional[list[str]] = ["<|im_end|>", "<|endoftext|>"]
@@ -148,7 +148,7 @@ async def chat_response(engine: AsyncVLLMEngine, request_id: str):
                         "role": "assistant",
                         "content": output.text,
                         "logprobs": output.logprobs,
-                        "token_ids": output.token_ids,
+                        "token_ids": [],
                         "tool_calls": output.tool_calls,
                     },
                     "finish_reason": output.finish_reason,
@@ -198,7 +198,7 @@ async def stream_chat_response(engine: AsyncVLLMEngine, request_id: str):
                                 "role": "assistant",
                                 "content": delta.text,
                                 "logprobs": delta.logprobs,
-                                "token_ids": delta.token_ids,
+                                "token_ids": [],
                                 "tool_calls": delta.tool_calls,
                             },
                             "finish_reason": delta.finish_reason,
