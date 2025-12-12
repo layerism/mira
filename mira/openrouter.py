@@ -223,6 +223,12 @@ class OpenRouterLLM:
         response_format: Optional[Any] = None,
         **kwargs,
     ):
+        if response_format:
+            if isinstance(response_format, str):
+                response_format = {"type": "regex", "pattern": response_format}
+            else:
+                response_format = response_format.schema()
+
         # define an async queue
         rollouts = {}
 
@@ -232,7 +238,7 @@ class OpenRouterLLM:
                 model=self.model,
                 messages=[m.dict() for m in messages],
                 tools=[tool.schema() for tool in tools] or None,
-                response_format=response_format.schema() if response_format else None,
+                response_format=response_format,
                 tool_choice="auto" if tools else None,
                 args=self.args.set_params(**kwargs),
             )

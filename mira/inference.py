@@ -344,16 +344,21 @@ class VLLMEngine(Engine):
 
         return engine_args
 
-    def get_sampling_params(self, response_format: Optional[dict] = None, **kwargs):
+    def get_sampling_params(self, response_format: Optional[dict | str] = None, **kwargs):
         args = copy.deepcopy(self.args).set_params(**kwargs)
         sampling_keys = inspect.signature(SamplingParams).parameters.keys()
         sampling_args = {k: v for k, v in args.to_dict().items() if k in sampling_keys}
         sampling_params = SamplingParams(**sampling_args)
 
         if response_format:
-            schema = response_format["json_schema"]["schema"]
-            so = StructuredOutputsParams(json=schema)
-            sampling_params.structured_outputs = so
+            if response_format["type"] == "json_schema":
+                schema = response_format["json_schema"]["schema"]
+                so = StructuredOutputsParams(json=schema, regex=None)
+                sampling_params.structured_outputs = so
+            elif response_format["type"] == "regex":
+                pattern = response_format["pattern"]
+                so = StructuredOutputsParams(json=None, regex=pattern)
+                sampling_params.structured_outputs = so
 
         logger.info(f"sampling_params: {sampling_params}")
 

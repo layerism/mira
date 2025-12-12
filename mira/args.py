@@ -33,7 +33,7 @@ class OpenAIArgs(BaseArgs):
     """compatible with openai 2.8 protocol"""
 
     model: str = "gpt-5-mini"
-    stop: list[str] = field(default_factory=lambda: ["<|im_end|>", "<|endoftext|>", "END", "STOP"])
+    stop: list[str] = field(default_factory=lambda: [])
     max_completion_tokens: int = 8192
     parallel_tool_calls: bool = True
     reasoning_effort: Optional[Literal["minimal", "low", "medium", "high"]] = None
