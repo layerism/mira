@@ -4,11 +4,8 @@ import os
 import tyro
 from loguru import logger
 from pydantic import Field
-import time
 
-from mira.args import OpenAIArgs
-from mira.openrouter import OpenRouterLLM
-from mira.types import HumanMessage, LLMTool
+from mira import HumanMessage, LLMTool, OpenAIArgs, OpenRouterLLM
 
 problem = "calculate 34 + 2356 and calculate 467 * 12, then calculate the sum of the two results"
 
@@ -39,7 +36,6 @@ async def main(args: OpenAIArgs):
 
     for _ in range(1):
         dm = await llm.forward(messages=m, tools=[AddTool, MultiplyTool])
-        #dm = await llm.forward(messages=m)
         m = m + dm[0]
 
     logger.info(m)

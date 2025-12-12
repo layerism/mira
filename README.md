@@ -11,7 +11,6 @@ mira 就是一个尝试给 agent 提供这种工具的尝试
 
 
 ## 🌟 Features
-
 - 兼容 OpenAI 协议
 - 更加方便地 Rollout 获取概率和 pass@K 样本
 - 支持本地 vLLM、HF Transformers 模型
@@ -47,3 +46,15 @@ cd mira
 pip install --upgrade pip setuptools
 pip install -e .
 ```
+
+## Using API
+[Simple Using Example](tests/test_simple.py)
+[MultiTool Using Example](tests/test_multi_tool.py)
+[Struct Output Example](tests/test_struct_output.py)
+
+if you want to run the above example, you can use the following command:
+```bash
+cd mira
+python -m tests.test_simple --model 'doubao/ep-xxxx' --api_key 'xxx' --base_url 'https://ark.cn-beijing.volces.com/api/v3'
+```
+
